@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "237503922379",
+    "project_id": "stajprojesi-3c726",
+    "storage_bucket": "stajprojesi-3c726.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237503922379:android:60166ac92413e396f49b4e",
+        "android_client_info": {
+          "package_name": "com.probox3d.stajprojesi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBpbs3KI_TR9SG81DNYmIO19yGmT5WNCMM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Butona tıklanıldığında -->
+    <item android:drawable="@drawable/button_pressed" android:state_pressed="true" />
+    <!-- Butona üzerine gelindiğinde -->
+    <item android:drawable="@drawable/button_hovered" android:state_hovered="true" />
+    <!-- Normal durum -->
+    <item android:drawable="@drawable/button_normal" />
+</selector>
