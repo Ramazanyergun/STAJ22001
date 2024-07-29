@@ -28,7 +28,7 @@ public class MainActivity extends AppCompatActivity {
             return insets;
         });
 
-        button = findViewById(R.id.button); // Eğer ImageButton kullanıyorsanız
+        button = findViewById(R.id.button_createModel); // Eğer ImageButton kullanıyorsanız
 
         button.setOnClickListener(new View.OnClickListener() {
             @Override
