@@ -104,10 +104,6 @@ public class CameraActivity extends AppCompatActivity {
 
         setupCamera();
 
-
-
-
-
         // Switch için değişiklik dinleyicisi
         switchCompat.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (isChecked) {
@@ -198,7 +194,7 @@ public class CameraActivity extends AppCompatActivity {
                 // RecyclerView'a fotoğrafı ekleyin
                 thumbnailAdapter.addThumbnail(imageUri);
 
-                //uploadImage(imageUri); // Eğer resmi Firebase'e yükleyecekseniz
+                uploadImage(imageUri); // Eğer resmi Firebase'e yükleyecekseniz
             }
 
             @Override
@@ -256,7 +252,7 @@ public class CameraActivity extends AppCompatActivity {
                 });
     }
 
-    /*
+
     private void uploadImage(Uri imageUri) {
         if (this.imageUri == null) return;
 
@@ -286,7 +282,7 @@ public class CameraActivity extends AppCompatActivity {
                     Toast.makeText(CameraActivity.this, "Yükleme Başarısız", Toast.LENGTH_SHORT).show();
                 });
     }
-    */
+
 
     private void startRecordingAndCapturingPhotos() {
         // Video kaydını başlat
