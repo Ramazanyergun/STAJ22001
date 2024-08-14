@@ -1,4 +1,3 @@
-// CameraActivity.java
 package com.probox3d.stajprojesi;
 
 import android.app.ProgressDialog;
@@ -7,7 +6,9 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.provider.MediaStore;
+import android.view.View;
 import android.widget.ImageButton;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -30,13 +31,18 @@ import androidx.camera.video.VideoRecordEvent;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 
@@ -45,16 +51,19 @@ enum CameraMode {
     VIDEO
 }
 
-
 public class CameraActivity extends AppCompatActivity {
 
     private ProcessCameraProvider cameraProvider;
     private PreviewView previewView;
     private ImageCapture imageCapture;
     private VideoCapture<Recorder> videoCapture;
-    private ImageButton button_takePicture;
+
+    private Recorder recorder;
+    private Recording recording;
+
+    private ImageButton button_takePicture, button_pointCloud, button_showPictures;
     private SwitchCompat switchCompat;
-    private TextView photoCount;
+
 
     private CameraMode cameraMode = CameraMode.PHOTO; // Varsayılan olarak fotoğraf modu
 
@@ -62,8 +71,15 @@ public class CameraActivity extends AppCompatActivity {
     private ProgressDialog progressDialog;
     private Uri imageUri;
     private StorageReference storageReference;
-    private Recorder recorder;
-    private Recording recording;
+
+    private Handler handler;
+    private Runnable capturePhotoRunnable;
+    private boolean isRecording = false;
+    private int captureInterval = 1000; // 1 saniyede bir fotoğraf çek
+
+
+    private ThumbnailAdapter thumbnailAdapter;
+    private List<Uri> thumbnailUris;
 
 
     @Override
@@ -74,21 +90,32 @@ public class CameraActivity extends AppCompatActivity {
         // Firebase Storage referansını başlat
         storageReference = FirebaseStorage.getInstance().getReference();
         button_takePicture = findViewById(R.id.button_takePicture);
+        button_pointCloud = findViewById(R.id.button_pointCloud);
+        button_showPictures = findViewById(R.id.button_showPictures);
         switchCompat = findViewById(R.id.switch1);
-        photoCount = findViewById(R.id.photoCount);
         previewView = findViewById(R.id.pvPreview);
+
+
+        RecyclerView recyclerView = findViewById(R.id.recyclerView);
+        thumbnailUris = new ArrayList<>();
+        thumbnailAdapter = new ThumbnailAdapter(this, thumbnailUris);
+        recyclerView.setAdapter(thumbnailAdapter);
+        recyclerView.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+
+        setupCamera();
+
+
+
 
 
         // Switch için değişiklik dinleyicisi
         switchCompat.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (isChecked) {
                 cameraMode = CameraMode.VIDEO; // Video moduna geç
-                photoCount.setText("Video");
                 button_takePicture.setImageResource(R.drawable.round_fiber_manual_record_24);
 
             } else {
                 cameraMode = CameraMode.PHOTO; // Fotoğraf moduna geç
-                photoCount.setText("Foto");
                 button_takePicture.setImageResource(R.drawable.baseline_camera_48);
             }
         });
@@ -99,58 +126,22 @@ public class CameraActivity extends AppCompatActivity {
             if (cameraMode == CameraMode.PHOTO) {
                 capturePhoto();
             } else if (cameraMode == CameraMode.VIDEO) {
-                recordVideo();
+                startRecordingAndCapturingPhotos();
             }
         });
 
-        setupCamera();
-    }
 
-    private void recordVideo() {
-
-        button_takePicture.setImageResource(R.drawable.round_fiber_manual_record_24);
-        Recording recording1 = recording;
-        if (recording1 != null) {
-            recording1.stop();
-            recording = null;
-            return;
-        }
-        String name = new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.getDefault()).format(System.currentTimeMillis());
-        ContentValues contentValues = new ContentValues();
-        contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
-        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
-        contentValues.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/CameraX-Video");
-
-        MediaStoreOutputOptions options = new MediaStoreOutputOptions.Builder(getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-                .setContentValues(contentValues).build();
-        if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
-            return;
-        }
-        recording = videoCapture.getOutput().prepareRecording(CameraActivity.this, options).withAudioEnabled().start(ContextCompat.getMainExecutor(CameraActivity.this), videoRecordEvent -> {
-            if (videoRecordEvent instanceof VideoRecordEvent.Start) {
-                button_takePicture.setEnabled(true);
-            } else if (videoRecordEvent instanceof VideoRecordEvent.Finalize) {
-                if (!((VideoRecordEvent.Finalize) videoRecordEvent).hasError()) {
-                    String msg = "Video capture succeeded: " + ((VideoRecordEvent.Finalize) videoRecordEvent).getOutputResults().getOutputUri();
-                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-                } else {
-                    recording.close();
-                    recording = null;
-                    String msg = "Error: " + ((VideoRecordEvent.Finalize) videoRecordEvent).getError();
-                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-                }
-                button_takePicture.setImageResource(R.drawable.baseline_stop_circle_24);
-            }
+        //Çekilen Fotoğrafların yerinin gösterilmesi
+        button_showPictures.setOnClickListener(view -> {
+            Toast.makeText(CameraActivity.this, "Çekilen Resimlerin konumunu gösterecek", Toast.LENGTH_SHORT).show();
         });
-    }
 
+        //Point Cloud Gösterilmesi
+        button_pointCloud.setOnClickListener(view -> {
+            Toast.makeText(CameraActivity.this, "Point CLoud Gösterilecek", Toast.LENGTH_SHORT).show();
+        });
+
+    }
 
     private void setupCamera() {
         ListenableFuture<ProcessCameraProvider> cameraProviderListenableFuture = ProcessCameraProvider.getInstance(this);
@@ -162,6 +153,24 @@ public class CameraActivity extends AppCompatActivity {
                 throw new RuntimeException(e);
             }
         }, ContextCompat.getMainExecutor(this));
+    }
+
+    private void startCameraX(ProcessCameraProvider cameraProvider) {
+        CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+        Preview preview = new Preview.Builder().build();
+        preview.setSurfaceProvider(previewView.getSurfaceProvider());
+
+        imageCapture = new ImageCapture.Builder().build();
+
+        recorder = new Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HIGHEST)).build();
+        videoCapture = VideoCapture.withOutput(recorder);
+
+        try {
+            cameraProvider.unbindAll();
+            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, videoCapture);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private void capturePhoto() {
@@ -183,9 +192,13 @@ public class CameraActivity extends AppCompatActivity {
         imageCapture.takePicture(outputFileOptions, ContextCompat.getMainExecutor(this), new ImageCapture.OnImageSavedCallback() {
             @Override
             public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
-                imageUri = outputFileResults.getSavedUri();
+                Uri imageUri = outputFileResults.getSavedUri();
                 Toast.makeText(CameraActivity.this, "Image Captured: " + imageUri, Toast.LENGTH_SHORT).show();
-                uploadImage();
+
+                // RecyclerView'a fotoğrafı ekleyin
+                thumbnailAdapter.addThumbnail(imageUri);
+
+                //uploadImage(imageUri); // Eğer resmi Firebase'e yükleyecekseniz
             }
 
             @Override
@@ -195,9 +208,57 @@ public class CameraActivity extends AppCompatActivity {
         });
     }
 
+    private void recordVideo() {
+        // Ses kaydı iznini kontrol edin
+        if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{android.Manifest.permission.RECORD_AUDIO}, 1);
+            return;
+        }
 
-    private void uploadImage() {
-        if (imageUri == null) return;
+        // Eğer zaten kayıt yapılıyorsa durdur
+        if (recording != null) {
+            stopRecordingAndCapturingPhotos();
+            return;
+        }
+
+        String name = new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.getDefault()).format(System.currentTimeMillis());
+        ContentValues contentValues = new ContentValues();
+        contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
+        contentValues.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/CameraX-Video");
+
+        MediaStoreOutputOptions options = new MediaStoreOutputOptions.Builder(getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+                .setContentValues(contentValues).build();
+
+        recording = videoCapture.getOutput().prepareRecording(CameraActivity.this, options)
+                .withAudioEnabled()  // Ses kaydını etkinleştirir
+                .start(ContextCompat.getMainExecutor(CameraActivity.this), videoRecordEvent -> {
+                    if (videoRecordEvent instanceof VideoRecordEvent.Start) {
+                        // Video kaydı başlıyor
+                        button_takePicture.setEnabled(true);
+
+                        // Buton görünümünü güncelle
+                        button_takePicture.setImageResource(R.drawable.baseline_stop_circle_24);
+                        Toast.makeText(this, "Video kaydı başladı", Toast.LENGTH_SHORT).show();
+
+                    } else if (videoRecordEvent instanceof VideoRecordEvent.Finalize) {
+                        if (!((VideoRecordEvent.Finalize) videoRecordEvent).hasError()) {
+                            String msg = "Video kaydı başarıyla tamamlandı: " + ((VideoRecordEvent.Finalize) videoRecordEvent).getOutputResults().getOutputUri();
+                            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                            stopRecordingAndCapturingPhotos();
+                        } else {
+                            String msg = "Hata: " + ((VideoRecordEvent.Finalize) videoRecordEvent).getError();
+                            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                        }
+                        // Buton görünümünü tekrar değiştir
+                        button_takePicture.setImageResource(R.drawable.round_fiber_manual_record_24);
+                    }
+                });
+    }
+
+    /*
+    private void uploadImage(Uri imageUri) {
+        if (this.imageUri == null) return;
 
         progressDialog = new ProgressDialog(this);
         progressDialog.setTitle("Dosya yükleniyor...");
@@ -208,7 +269,7 @@ public class CameraActivity extends AppCompatActivity {
         String fileName = formatter.format(now);
         StorageReference fileRef = storageReference.child("images/" + fileName + ".jpg");
 
-        fileRef.putFile(imageUri)
+        fileRef.putFile(this.imageUri)
                 .addOnSuccessListener(taskSnapshot -> {
                     Toast.makeText(CameraActivity.this, "Başarıyla Yüklendi", Toast.LENGTH_SHORT).show();
                     if (progressDialog.isShowing()) {
@@ -225,22 +286,42 @@ public class CameraActivity extends AppCompatActivity {
                     Toast.makeText(CameraActivity.this, "Yükleme Başarısız", Toast.LENGTH_SHORT).show();
                 });
     }
+    */
 
-    private void startCameraX(ProcessCameraProvider cameraProvider) {
-        CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
-        Preview preview = new Preview.Builder().build();
-        preview.setSurfaceProvider(previewView.getSurfaceProvider());
+    private void startRecordingAndCapturingPhotos() {
+        // Video kaydını başlat
+        recordVideo();
 
-        imageCapture = new ImageCapture.Builder().build();
+        // Zamanlayıcıyı başlat
+        handler = new Handler();
+        capturePhotoRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (isRecording) {
+                    capturePhoto(); // Fotoğraf çek
+                    handler.postDelayed(this, captureInterval); // Zamanlayıcıyı tekrar çalıştır
+                }
+            }
+        };
 
-        recorder = new Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HIGHEST)).build();
-        videoCapture = VideoCapture.withOutput(recorder);
-
-        try {
-            cameraProvider.unbindAll();
-            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, videoCapture);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        // Zamanlayıcıyı başlat
+        isRecording = true;
+        handler.post(capturePhotoRunnable);
     }
+
+    private void stopRecordingAndCapturingPhotos() {
+        if (recording != null) {
+            recording.stop();  // Video kaydını durdur
+            recording = null;
+        }
+
+        isRecording = false;  // Kayıt durumunu kapat
+        if (handler != null && capturePhotoRunnable != null) {
+            handler.removeCallbacks(capturePhotoRunnable);  // Zamanlayıcıyı durdur
+        }
+
+        // Buton görünümünü tekrar güncelle
+        button_takePicture.setImageResource(R.drawable.round_fiber_manual_record_24);
+    }
+
 }
