@@ -1,11 +1,19 @@
 package com.probox3d.stajprojesi;
 
+
+import android.Manifest;
+import android.content.pm.PackageManager;
+
+import androidx.core.content.ContextCompat;
+import androidx.core.app.ActivityCompat;
+
 import android.app.ProgressDialog;
 import android.content.ContentValues;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.provider.MediaStore;
 import android.view.View;
@@ -14,6 +22,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Size;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.camera.core.CameraSelector;
@@ -29,8 +38,7 @@ import androidx.camera.video.Recording;
 import androidx.camera.video.VideoCapture;
 import androidx.camera.video.VideoRecordEvent;
 import androidx.camera.view.PreviewView;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
+
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -39,6 +47,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -46,10 +55,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 
-enum CameraMode {
-    PHOTO,
-    VIDEO
-}
 
 public class CameraActivity extends AppCompatActivity {
 
@@ -61,11 +66,10 @@ public class CameraActivity extends AppCompatActivity {
     private Recorder recorder;
     private Recording recording;
 
-    private ImageButton button_takePicture, button_pointCloud, button_showPictures;
+    private ImageButton button_takePicture, startProcess;
     private SwitchCompat switchCompat;
 
-
-    private CameraMode cameraMode = CameraMode.PHOTO; // Varsayılan olarak fotoğraf modu
+    CameraMode cameraMode = CameraMode.PHOTO; // Varsayılan olarak fotoğraf modu
 
     // Firebase Storage referansı
     private ProgressDialog progressDialog;
@@ -76,6 +80,7 @@ public class CameraActivity extends AppCompatActivity {
     private Runnable capturePhotoRunnable;
     private boolean isRecording = false;
     private int captureInterval = 1000; // 1 saniyede bir fotoğraf çek
+    private static final int CAMERA_PERMISSION_REQUEST_CODE = 1001;
 
 
     private ThumbnailAdapter thumbnailAdapter;
@@ -87,13 +92,20 @@ public class CameraActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_camera);
 
+        // Kamera izni kontrolü
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
+        } else {
+            // İzin verilmişse, kamera işlemlerini başlat
+            setupCamera();
+        }
+
         // Firebase Storage referansını başlat
         storageReference = FirebaseStorage.getInstance().getReference();
         button_takePicture = findViewById(R.id.button_takePicture);
-        button_pointCloud = findViewById(R.id.button_pointCloud);
-        button_showPictures = findViewById(R.id.button_showPictures);
         switchCompat = findViewById(R.id.switch1);
         previewView = findViewById(R.id.pvPreview);
+        startProcess = findViewById(R.id.startProcess);
 
 
         RecyclerView recyclerView = findViewById(R.id.recyclerView);
@@ -101,8 +113,6 @@ public class CameraActivity extends AppCompatActivity {
         thumbnailAdapter = new ThumbnailAdapter(this, thumbnailUris);
         recyclerView.setAdapter(thumbnailAdapter);
         recyclerView.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
-
-        setupCamera();
 
         // Switch için değişiklik dinleyicisi
         switchCompat.setOnCheckedChangeListener((buttonView, isChecked) -> {
@@ -126,17 +136,24 @@ public class CameraActivity extends AppCompatActivity {
             }
         });
 
+        startProcess.setOnClickListener(view -> reconstruction_3D());
 
-        //Çekilen Fotoğrafların yerinin gösterilmesi
-        button_showPictures.setOnClickListener(view -> {
-            Toast.makeText(CameraActivity.this, "Çekilen Resimlerin konumunu gösterecek", Toast.LENGTH_SHORT).show();
-        });
+    }
 
-        //Point Cloud Gösterilmesi
-        button_pointCloud.setOnClickListener(view -> {
-            Toast.makeText(CameraActivity.this, "Point CLoud Gösterilecek", Toast.LENGTH_SHORT).show();
-        });
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // İzin verildi, kamera işlemlerini başlat
+                setupCamera();
+            } else {
+                // İzin reddedildi, kullanıcıya bilgi ver
+                Toast.makeText(this, "Kamera izni verilmedi", Toast.LENGTH_SHORT).show();
+            }
+        }
     }
 
     private void setupCamera() {
@@ -156,7 +173,9 @@ public class CameraActivity extends AppCompatActivity {
         Preview preview = new Preview.Builder().build();
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-        imageCapture = new ImageCapture.Builder().build();
+        ImageCapture.Builder builder = new ImageCapture.Builder();
+        builder.setJpegQuality(100); // JPEG kalitesini en yüksek seviyeye getir
+        imageCapture = builder.build();
 
         recorder = new Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HIGHEST)).build();
         videoCapture = VideoCapture.withOutput(recorder);
@@ -169,32 +188,43 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
 
+    private File getModelDirectory(String modelFolderName) {
+        // Harici depolama alanındaki uygulama klasörünü alın
+        File modelDirectory = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), modelFolderName);
+
+        // Klasör yoksa oluştur
+        if (!modelDirectory.exists()) {
+            modelDirectory.mkdirs();
+        }
+
+        return modelDirectory;
+    }
+
     private void capturePhoto() {
         if (imageCapture == null) return;
+        String modelFolderName = "model01"; // Her model için bu değeri dinamik yapabilirsiniz
+
+        // Fotoğrafı kaydetmek için bir dosya yolu oluşturun
+        File photoFile = new File(getModelDirectory(modelFolderName), System.currentTimeMillis() + ".jpg");
+
+        ImageCapture.OutputFileOptions outputFileOptions = new ImageCapture.OutputFileOptions.Builder(photoFile).build();
 
         String name = System.currentTimeMillis() + "";
         ContentValues contentValues = new ContentValues();
         contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
-        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            contentValues.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraXStable");
-        }
-        ImageCapture.OutputFileOptions outputFileOptions = new ImageCapture.OutputFileOptions.Builder(
-                getContentResolver(),
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                contentValues
-        ).build();
+        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpg");
 
         imageCapture.takePicture(outputFileOptions, ContextCompat.getMainExecutor(this), new ImageCapture.OnImageSavedCallback() {
             @Override
             public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
-                Uri imageUri = outputFileResults.getSavedUri();
-                Toast.makeText(CameraActivity.this, "Image Captured: " + imageUri, Toast.LENGTH_SHORT).show();
+                Uri savedUri = Uri.fromFile(photoFile);
+                Toast.makeText(CameraActivity.this, "Image saved: " + savedUri.toString(), Toast.LENGTH_SHORT).show();
 
-                // RecyclerView'a fotoğrafı ekleyin
-                thumbnailAdapter.addThumbnail(imageUri);
+                // Fotoğrafı RecyclerView'a ekleyin
+                thumbnailAdapter.addThumbnail(savedUri);
 
-                uploadImage(imageUri); // Eğer resmi Firebase'e yükleyecekseniz
+                // Firebase'e yükleme (Opsiyonel)
+                uploadImage(savedUri, modelFolderName);
             }
 
             @Override
@@ -223,11 +253,9 @@ public class CameraActivity extends AppCompatActivity {
         contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
         contentValues.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/CameraX-Video");
 
-        MediaStoreOutputOptions options = new MediaStoreOutputOptions.Builder(getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-                .setContentValues(contentValues).build();
+        MediaStoreOutputOptions options = new MediaStoreOutputOptions.Builder(getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(contentValues).build();
 
-        recording = videoCapture.getOutput().prepareRecording(CameraActivity.this, options)
-                .withAudioEnabled()  // Ses kaydını etkinleştirir
+        recording = videoCapture.getOutput().prepareRecording(CameraActivity.this, options).withAudioEnabled()  // Ses kaydını etkinleştirir
                 .start(ContextCompat.getMainExecutor(CameraActivity.this), videoRecordEvent -> {
                     if (videoRecordEvent instanceof VideoRecordEvent.Start) {
                         // Video kaydı başlıyor
@@ -253,29 +281,38 @@ public class CameraActivity extends AppCompatActivity {
     }
 
 
-    private void uploadImage(Uri imageUri) {
-        if (this.imageUri == null) return;
+    private void uploadImage(Uri imageUri, String modelFolderName) {
+        if (imageUri == null) return;  // imageUri'yi kontrol ediyoruz, imageUri ile değiştirin.
 
+        // Yükleme sırasında bir ProgressDialog gösteriyoruz.
         progressDialog = new ProgressDialog(this);
         progressDialog.setTitle("Dosya yükleniyor...");
         progressDialog.show();
 
+        // Dosya ismi için zaman damgası kullanıyoruz.
         SimpleDateFormat formatter = new SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.CANADA);
         Date now = new Date();
         String fileName = formatter.format(now);
-        StorageReference fileRef = storageReference.child("images/" + fileName + ".jpg");
 
-        fileRef.putFile(this.imageUri)
+        // Klasör adı ve dosya yolunu ayarlıyoruz. Model adına göre klasöre kaydedilecek.
+        StorageReference fileRef = storageReference.child(modelFolderName + "/" + fileName + ".png");
+
+        // Dosyayı Firebase'e yüklüyoruz.
+        fileRef.putFile(imageUri)
                 .addOnSuccessListener(taskSnapshot -> {
+                    // Yükleme başarılı olduğunda Toast mesajı gösteriyoruz.
                     Toast.makeText(CameraActivity.this, "Başarıyla Yüklendi", Toast.LENGTH_SHORT).show();
                     if (progressDialog.isShowing()) {
-                        progressDialog.dismiss();
+                        progressDialog.dismiss();  // ProgressDialog'u kapatıyoruz.
                     }
+
+                    // Dosyanın indirme URL'sini alıyoruz.
                     fileRef.getDownloadUrl().addOnSuccessListener(uri -> {
                         String downloadUrl = uri.toString();
-                        // İndirilen URL'yi kullanın
+                        // İndirilen URL'yi kullanabilir ya da başka bir işlem yapabilirsiniz.
                     });
                 }).addOnFailureListener(e -> {
+                    // Yükleme başarısız olursa hata mesajı gösteriyoruz.
                     if (progressDialog.isShowing()) {
                         progressDialog.dismiss();
                     }
@@ -318,6 +355,10 @@ public class CameraActivity extends AppCompatActivity {
 
         // Buton görünümünü tekrar güncelle
         button_takePicture.setImageResource(R.drawable.round_fiber_manual_record_24);
+    }
+
+    private void reconstruction_3D() {
+
     }
 
 }
